@@ -50,6 +50,7 @@ parser.add_argument("--temp_floor", type=float, default=0.8)
 parser.add_argument("--temp_ceil", type=float, default=1.2)
 
 parser.add_argument("--score_aggregation", type=str, default=None)
+parser.add_argument("--temp_update_rule", type=str, default=None)
 
 
 # PRM config
@@ -238,6 +239,7 @@ if __name__ == '__main__':
             generator = generator, 
             prm = prm,
             max_trials=args.max_trials,
+            temp_update_rule=args.temp_update_rule,
             score_aggregation=args.score_aggregation,
         )
     else:
