@@ -21,12 +21,14 @@ git clone <YOUR_LANGDEC_REPOSITORY_URL> langdec
 cd langdec
 
 # (Optional) Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate    # Windows: .venv\Scripts\activate
+conda create -n $NAME
+conda activate $NAME
+conda install python=3.10
 
-# Install dependencies
-pip install --upgrade pip
+# For CUDA 11.8 (4090~)
+pip3 install torch torchvision torchaudio
 pip install -r requirements.txt
+# pip install flash-attn # If you use flash-attention
 ```
 
 ---

@@ -9,7 +9,7 @@ import numpy as np
 from enum import Enum
 from tqdm import tqdm
 from pathlib import Path
-from datetime import datet
+from datetime import datetime
 from collections import defaultdict
 from dataclasses import is_dataclass, asdict
 

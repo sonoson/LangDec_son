@@ -73,7 +73,7 @@ class SelfConsistencySearch:
         return self.prm(responses, prm_state)
 
     def _update_temperature(self):
-        if self.temp_update_rule None:
+        if self.temp_update_rule is None:
             return None
         else:
             # TODO

@@ -27,10 +27,10 @@ CUDA_DEVICE_ID=0
 
 seed=1234
 
-dataset=TIGER-Lab/MMLU-Pro
+dataset='HuggingFaceH4/MATH-500'
 
-start=12000
-end=12100
+start=0
+end=1
 
 CUDA_VISIBLE_DEVICES=$CUDA_DEVICE_ID python main.py \
     --seed $seed\
@@ -48,3 +48,4 @@ CUDA_VISIBLE_DEVICES=$CUDA_DEVICE_ID python main.py \
     --positive_tag $POSITIVE_TAG \
     --negative_tag $NEGATIVE_TAG \
     --test_sample_idx $(seq $start $end)
+
