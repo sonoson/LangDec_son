@@ -135,7 +135,11 @@ def save_config_and_prepare_dir(args):
 
     # 3) make a timestamped folder
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = Path(f"experiments-{pretty_dataset}")
+
+    if os.environ.get('GDRIVE_DIR', False):
+        base = Path(f"{os.environ.get('GDRIVE_DIR')}/experiments-{pretty_dataset}")
+    else:
+        base = Path(f"experiments-{pretty_dataset}")
     run_dir = base / f'{args.model_name.replace("/", "_")}-{args.prm_model_name.replace("/", "_")}-{args.method.replace("/", "_")}'
     run_dir.mkdir(parents=True, exist_ok=True)
 

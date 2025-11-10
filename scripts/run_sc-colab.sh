@@ -1,6 +1,7 @@
 export HF_TOKEN=TODO
-export CACHE_DIR=TODO
+export CACHE_DIR="/content"
 export ATTN_IMPLEMENTATION='sdpa' # 'flash_attention_2'
+export GDRIVE_DIR="/content/drive/MyDrive/colab_files"
 
 # Define default arguments
 MAX_NEW_TOKENS=1000
