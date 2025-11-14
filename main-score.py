@@ -114,7 +114,7 @@ def load_results_for_method(method, base_dir="experiments-mmlupro"):
 
     method_qids = {
         'math500' : list(range(500)),
-        'math100' : list(range(100))
+        'math100' : list(range(99))
     }
     target_qids = method_qids[dataset]
     for fname in os.listdir(method_dir):
