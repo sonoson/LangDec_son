@@ -51,7 +51,7 @@ class SelfConsistencySearch:
         generator: BaseGenerator,
         prm: BasePRM,
 
-        temp_update_rule=None,
+        temp_update_rule=1.0,
         max_trials: int = None,
         score_aggregation: Literal["min", "mean", "last", 'prod'] = "min",
     ):
@@ -79,7 +79,7 @@ class SelfConsistencySearch:
             return None
         else:
             # TODO
-            # self.generator.temperature = ...
+            self.generator.temperature = self.temp_update_rule
             raise NotImplementedError()
 
     def __call__(self, question: str):
