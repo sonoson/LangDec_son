@@ -213,7 +213,7 @@ def evaluate_method_single(llm, prm, core_method, results_dir="experiments-mmlup
                                 any_correct = True
                                 break
                             else:
-                                raise KeyError()
+                                raise KeyError(parsed)
                         correct = any_correct
                         pred = "AnyCorrect" if any_correct else "AllWrong"
                     else:
