@@ -86,7 +86,6 @@ dataset_query_key = {
     'HuggingFaceH4/MATH-500': 'problem',
     'deepmind/aqua_rat' : 'question',
     'ChilleD/SVAMP' : 'question_concat',
-    'amphora/MCLM': 'en'
 }   
 
 def to_jsonable(obj):
@@ -132,7 +131,7 @@ def save_config_and_prepare_dir(args):
     elif args.dataset == 'TIGER-Lab/MMLU-Pro':
         pretty_dataset = 'mmlupro'
     elif args.dataset == 'amphora/MCLM':
-        pretty_dataset = 'math100'
+        pretty_dataset = 'MT-MATH100'
     else:
         raise KeyError()
 
@@ -189,14 +188,14 @@ if __name__ == '__main__':
         test_dataset = dataset['test']     
     elif args.dataset == 'TIGER-Lab/MMLU-Pro':
         dataset = load_dataset(args.dataset, cache_dir=os.getenv('CACHE_DIR'))
-        test_dataset = dataset['test']
-    elif args.dataset == 'amphora/MCLM':
-        dataset = load_dataset(args.dataset, "MT-MATH100", cache_dir=os.getenv('CACHE_DIR'))
-        test_dataset = dataset['test']
+        test_dataset = dataset['test']     
     elif 'cais/mmlu' in args.dataset:
         assert '-' in args.dataset
         dataset = load_dataset('cais/mmlu', args.dataset.split('-')[-1], cache_dir=os.getenv('CACHE_DIR'))
         test_dataset = dataset['test']
+    elif args.dataset == 'amphora/MCLM':
+        dataset = load_dataset(args.dataset, 'MT-MATH100')
+        test_dataset = dataset['test']   
     else:
         raise KeyError()
 
@@ -270,12 +269,6 @@ if __name__ == '__main__':
             # query 만들기question
             test_query = test_sample["problem"]
             formatted_query = f"{test_query}"
-        elif args.dataset == 'amphora/MCLM':
-            qid = test_idx
-
-            # query 만들기question
-            test_query = test_sample["en"]
-            formatted_query = f"{test_query}"
         elif args.dataset == 'TIGER-Lab/MMLU-Pro':
             qid = test_sample["question_id"]  # MMLU-Pro 전용
 
@@ -285,6 +278,12 @@ if __name__ == '__main__':
             formatted_query = f"{test_query}\n"
             for i, choice in enumerate(options):
                 formatted_query += f"{i}. {choice}\n"
+        elif args.dataset == 'amphora/MCLM':
+            qid = test_idx
+
+            # query 만들기question
+            test_query = test_sample["en"]
+            formatted_query = f"{test_query}"
         else:
             raise KeyError()
 
