@@ -212,8 +212,11 @@ def evaluate_method_single(llm, prm, core_method, results_dir="experiments-mmlup
                             if grade_answer(parsed, normalize_answer(answer_option)):
                                 any_correct = True
                                 break
-                            else:
-                                raise KeyError(parsed)
+                            # 현재 코드에서는 MATH 계열 데이터 셋을 사용하는 것을 가정하고 사용하도록 수정되어 있음.
+                            # 필요한 경우 각 데이터 셋별로 parser를 사용 후 분기처리를 하도록 수정을 해야 함.
+                            # 아래 라인은 기존에 데이터 셋 별 분기처리시 하용하던 코드 일부로 현재는 제외하고 사용함.
+                            # else:
+                            #     raise KeyError(parsed)
                         correct = any_correct
                         pred = "AnyCorrect" if any_correct else "AllWrong"
                     else:
