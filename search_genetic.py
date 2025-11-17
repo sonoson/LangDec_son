@@ -164,6 +164,7 @@ class GeneticSearch:
         self.init_number_of_beams = 1
 
         self.trial_to_ids = {}
+        self.trial_to_logits = {}
         self.metric = metric
         self.select_strategy = select_strategy
 
@@ -182,6 +183,7 @@ class GeneticSearch:
 
     def __call__(self, question: str):
         self.trial_to_ids = {}
+        self.trial_to_logits = {}
         self.trials = 0
         input_ids_question = self.generator.encode(question)
         gen_state_question = self.generator.init_state(input_ids_question)
@@ -195,9 +197,11 @@ class GeneticSearch:
         complete_beams = defaultdict(list)
         
         proposal_ids, proposal_logits, gen_state = self.generator(input_ids_question, gen_state_question)
-        proposal_metric_seq = compute_metric(self.metric, proposal_logits)
-        peak_ids = find_local_maxima(proposal_metric_seq)
+        # print(f'proposal_logits:{proposal_logits.shape}')
+        # proposal_metric_seq = compute_metric(self.metric, proposal_logits)
+        # peak_ids = find_local_maxima(proposal_metric_seq)
         self.trial_to_ids[self.trials] = proposal_ids
+        self.trial_to_logits[self.trials] = proposal_logits
         self.trials += 1
 
         proposal_response_ids = proposal_ids[:, input_len :]
@@ -227,12 +231,17 @@ class GeneticSearch:
         for trial_idx in range(self.max_trials-1):
             selected_idx = select_case_index(complete_beams, strategy=self.select_strategy)
             selected_ids = self.trial_to_ids[selected_idx]
+            selected_logits = self.trial_to_logits[selected_idx][0]
+            print(f'selected_logits:{selected_logits.shape}')
+            proposal_metric_seq = compute_metric(self.metric, selected_logits)
+            peak_ids = find_local_maxima(proposal_metric_seq)
             self._update_temperature()
             if len(peak_ids) == 0:
                 # peak이 없는 상황의 경우 그냥 처음부터 새로 생성
                 input_ids_for_proposal = input_ids_question
                 new_proposal_ids, new_proposal_logits, new_gen_state = self.generator(input_ids_for_proposal, gen_state_question)
                 self.trial_to_ids[self.trials] = new_proposal_ids
+                self.trial_to_logits[self.trials] = new_proposal_logits
                 self.trials += 1
 
                 new_proposal_respose_ids = new_proposal_ids[:, input_len :]
@@ -253,6 +262,7 @@ class GeneticSearch:
                 input_ids_for_proposal = selected_ids[:, :input_len+peak_idx]
                 new_proposal_ids, new_proposal_logits, new_gen_state = self.generator(input_ids_for_proposal, gen_state_question)
                 self.trial_to_ids[self.trials] = new_proposal_ids
+                self.trial_to_logits[self.trials] = new_proposal_logits
                 self.trials += 1
 
                 new_proposal_respose_ids = new_proposal_ids[:, input_len :]

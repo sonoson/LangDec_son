@@ -36,7 +36,7 @@ end=1
 CUDA_VISIBLE_DEVICES=$CUDA_DEVICE_ID python LangDec/main.py \
     --seed $seed\
     --method "Genetic_${METHOD_NAME}"\
-    --metirc "top1"\
+    --metric "top1"\
     --select_strategy "random"\
     --version V1\
     --dataset $dataset\
