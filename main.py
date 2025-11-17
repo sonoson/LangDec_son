@@ -20,6 +20,7 @@ from general_prm import GeneralPRM
 from deepseek_prm import DeepseekPRM
 from llama_generator import LlamaGenerator
 from search_sc import SelfConsistencySearch
+from search_genetic import GeneticSearch
 
 # Create a logger object
 logger = logging.getLogger(__name__)
@@ -52,6 +53,8 @@ parser.add_argument("--temp_ceil", type=float, default=1.2)
 parser.add_argument("--score_aggregation", type=str, default=None)
 parser.add_argument("--temp_update_rule", type=str, default=None)
 
+parser.add_argument("--metric", type=str, default='top1')
+parser.add_argument("--select_strategy", type=str, default='random')
 
 # PRM config
 parser.add_argument("--prm_model_name", type=str, default="UW-Madison-Lee-Lab/VersaPRM", help="Name of the model to use.")
@@ -86,6 +89,7 @@ dataset_query_key = {
     'HuggingFaceH4/MATH-500': 'problem',
     'deepmind/aqua_rat' : 'question',
     'ChilleD/SVAMP' : 'question_concat',
+    'amphora/MCLM': 'en'
 }   
 
 def to_jsonable(obj):
@@ -131,7 +135,7 @@ def save_config_and_prepare_dir(args):
     elif args.dataset == 'TIGER-Lab/MMLU-Pro':
         pretty_dataset = 'mmlupro'
     elif args.dataset == 'amphora/MCLM':
-        pretty_dataset = 'MT-MATH100'
+        pretty_dataset = 'math100'
     else:
         raise KeyError()
 
@@ -188,14 +192,14 @@ if __name__ == '__main__':
         test_dataset = dataset['test']     
     elif args.dataset == 'TIGER-Lab/MMLU-Pro':
         dataset = load_dataset(args.dataset, cache_dir=os.getenv('CACHE_DIR'))
-        test_dataset = dataset['test']     
+        test_dataset = dataset['test']
+    elif args.dataset == 'amphora/MCLM':
+        dataset = load_dataset(args.dataset, "MT-MATH100", cache_dir=os.getenv('CACHE_DIR'))
+        test_dataset = dataset['test']
     elif 'cais/mmlu' in args.dataset:
         assert '-' in args.dataset
         dataset = load_dataset('cais/mmlu', args.dataset.split('-')[-1], cache_dir=os.getenv('CACHE_DIR'))
         test_dataset = dataset['test']
-    elif args.dataset == 'amphora/MCLM':
-        dataset = load_dataset(args.dataset, 'MT-MATH100')
-        test_dataset = dataset['test']   
     else:
         raise KeyError()
 
@@ -251,6 +255,18 @@ if __name__ == '__main__':
             temp_update_rule=args.temp_update_rule,
             score_aggregation=args.score_aggregation,
         )
+    elif 'Genetic' in args.method:
+        search = GeneticSearch(
+            method=args.method,
+            generator = generator, 
+            prm = prm,
+            max_trials=args.max_trials,
+            temp_update_rule=args.temp_update_rule,
+            score_aggregation=args.score_aggregation,
+            metric=args.metric,
+            select_strategy=args.select_strategy,
+        )        
+        
     else:
         raise KeyError()
             
@@ -269,6 +285,12 @@ if __name__ == '__main__':
             # query 만들기question
             test_query = test_sample["problem"]
             formatted_query = f"{test_query}"
+        elif args.dataset == 'amphora/MCLM':
+            qid = test_idx
+
+            # query 만들기question
+            test_query = test_sample["en"]
+            formatted_query = f"{test_query}"
         elif args.dataset == 'TIGER-Lab/MMLU-Pro':
             qid = test_sample["question_id"]  # MMLU-Pro 전용
 
@@ -278,12 +300,6 @@ if __name__ == '__main__':
             formatted_query = f"{test_query}\n"
             for i, choice in enumerate(options):
                 formatted_query += f"{i}. {choice}\n"
-        elif args.dataset == 'amphora/MCLM':
-            qid = test_idx
-
-            # query 만들기question
-            test_query = test_sample["en"]
-            formatted_query = f"{test_query}"
         else:
             raise KeyError()
 
