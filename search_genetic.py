@@ -44,7 +44,7 @@ def aggregate(vals, agg_method):
 
 def select_case_index(
     complete_beams: dict,
-    strategy: str = "random",   # "best", "random", 또는 정수 인덱스
+    strategy: str = "best",   # "best", "random", 또는 정수 인덱스
 ) -> int:
     """
     (1) complete_beams에서 사용할 케이스 하나 선택하고, 그 인덱스를 리턴하는 함수.
