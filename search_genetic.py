@@ -212,18 +212,18 @@ class GeneticSearch:
         proposal_agg_scores = aggregate(proposal_scores, self.score_aggregation).item()
 
         is_complete = self.generator.is_complete(proposal_ids)
-        if not is_complete[0]:
-            complete_beams['CaseType'].append('Candidates')
-            complete_beams['answer'] = []
-            complete_beams['aggregate_scores'] = []
-            complete_beams['step_scores'] = []
-            complete_beams['temp'] = [self.generator.temperature]
-        else:
-            complete_beams['CaseType'].append('Candidates')
-            complete_beams['answer'].append(proposal_response_text[0])
-            complete_beams['aggregate_scores'].append(proposal_agg_scores)
-            complete_beams['step_scores'].append(proposal_scores.tolist())
-            complete_beams['temp'].append(self.generator.temperature)
+        # if not is_complete[0]:
+        #     complete_beams['CaseType'].append('Candidates')
+        #     complete_beams['answer'] = []
+        #     complete_beams['aggregate_scores'] = []
+        #     complete_beams['step_scores'] = []
+        #     complete_beams['temp'] = [self.generator.temperature]
+        # else:
+        complete_beams['CaseType'].append('Candidates')
+        complete_beams['answer'].append(proposal_response_text[0])
+        complete_beams['aggregate_scores'].append(proposal_agg_scores)
+        complete_beams['step_scores'].append(proposal_scores.tolist())
+        complete_beams['temp'].append(self.generator.temperature)
 
         # last_proposal_ids = proposal_ids.clone()
         logger.info(f'[Genetic] Intial {self.trials}/{self.max_trials} : {proposal_agg_scores:.4f}')
