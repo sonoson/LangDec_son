@@ -1,282 +1,321 @@
-
 import os
-import re
+import json
+import yaml
+import torch
 import random
 import logging
+import argparse
 import numpy as np
+from enum import Enum
+from tqdm import tqdm
+from pathlib import Path
+from datetime import datetime
 from collections import defaultdict
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from dataclasses import is_dataclass, asdict
 
-import torch
-import torch.nn.functional as F
+from datasets import load_dataset
+import torch.backends.cudnn as cudnn
 
-from interfaces import BaseGenerator, BasePRM
+from general_prm import GeneralPRM
+from deepseek_prm import DeepseekPRM
+from llama_generator import LlamaGenerator
+from search_sc import SelfConsistencySearch
+from search_genetic_agg import GeneticSearch
 
-level = logging.INFO
-if os.getenv('DEBUG', False):
-    level = logging.DEBUG
-
-# 로깅 설정
-logging.basicConfig(
-    level=level,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("bootstrap_search.log"), logging.StreamHandler()],
-)
+# Create a logger object
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+parser = argparse.ArgumentParser(description="Decoding using Hugging Face Transformers")
+
+# Setup
+parser.add_argument('--seed', type=int, default=123)
+parser.add_argument("--hf_token", type=str, default=None, help="Hugging Face token for authentication.")
+parser.add_argument("--method", type=str, default=None)
+parser.add_argument("--version", type=str, default=None)
+
+parser.add_argument('--dataset', type=str)
+parser.add_argument("--max_new_tokens", type=int, default=1000, help="Maximum number of new tokens to generate.")
+parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-1B-Instruct", help="Name of the model to use.")
+parser.add_argument("--use_past_key_values", type=bool, default=False, help="Whether to use past key values for faster inference.")
+parser.add_argument("--batch_size", type=int, default=1, help="Batch size for processing.")
+parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device to run the model (e.g., cuda, cpu).")
+parser.add_argument("--secondary_device", type=str, default="cpu", help="Secondary device to offload computation (e.g., cpu).")
+
+# Search config
+parser.add_argument("--max_trials", type=int, default=None)
+parser.add_argument("--pool_size", type=int, default=None)
+
+parser.add_argument("--temp_change_rate", type=float, default=0.1)
+parser.add_argument("--temp_floor", type=float, default=0.8)
+parser.add_argument("--temp_ceil", type=float, default=1.2)
+
+parser.add_argument("--score_aggregation", type=str, default=None)
+parser.add_argument("--temp_update_rule", type=str, default=None)
+
+parser.add_argument("--metric", type=str, default='top1')
+parser.add_argument("--select_strategy", type=str, default='random')
+
+# PRM config
+parser.add_argument("--prm_model_name", type=str, default="UW-Madison-Lee-Lab/VersaPRM", help="Name of the model to use.")
+parser.add_argument("--positive_tag", type=str, default="+", help="Positive tag used in the model.")
+parser.add_argument("--negative_tag", type=str, default="-", help="Negative tag used in the model.")
+parser.add_argument("--score_token", type=str, default=" \n\n\n\n", help="Token used to calculate or indicate scores.")
+
+parser.add_argument(
+    '--test_sample_idx',
+    type=int,
+    nargs='+',  # 여러 값 허용
+    default=[],
+    help="실행할 샘플 인덱스 리스트 (예: --test_sample_idx 1 5 7)"
+)
+
+logging.basicConfig(level=logging.INFO)
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    cudnn.benchmark = False
+    cudnn.deterministic = True
+    random.seed(seed)
 
 
-def aggregate(vals, agg_method):
-    if agg_method == "min":
-        aggregate_scores, _ = torch.min(vals, dim=-1)
-    elif agg_method == "mean":
-        aggregate_scores = torch.mean(vals, dim=-1)
-    elif agg_method == "sum":
-        aggregate_scores = torch.sum(vals, dim=-1)
-    elif agg_method == "last":
-        aggregate_scores = vals[:, -1]
-    elif agg_method == "prod":
-        aggregate_scores = torch.cumprod(vals, dim=1)[:, -1]
+dataset_query_key = {
+    'openai/gsm8k' : 'question',
+    'Idavidrein/gpqa' : 'Question',
+    'Maxwell-Jia/AIME_2024' : 'Problem',
+    'HuggingFaceH4/MATH-500': 'problem',
+    'deepmind/aqua_rat' : 'question',
+    'ChilleD/SVAMP' : 'question_concat',
+    'amphora/MCLM': 'en'
+}   
+
+def to_jsonable(obj):
+    # 1) PyTorch
+    if isinstance(obj, torch.Tensor):
+        return obj.item() if obj.ndim == 0 else obj.tolist()
+    # 2) NumPy
+    if isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    # 3) 표준 컨테이너
+    if isinstance(obj, dict):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [to_jsonable(v) for v in obj]
+    # 4) dataclass, Enum 등
+    if is_dataclass(obj):
+        return to_jsonable(asdict(obj))
+    if isinstance(obj, Enum):
+        return obj.value
+    # 5) NaN/Inf 처리(옵션)
+    if isinstance(obj, float):
+        if obj != obj or obj in (float('inf'), float('-inf')):
+            return None  # 혹은 문자열로 변환: str(obj)
+    # 6) 기본형
+    return obj
+
+def save_config_and_prepare_dir(args):
+    # 1) collect env vars
+    env_vars = {
+        key: os.environ.get(key)
+        for key in ("CUDA_VISIBLE_DEVICES", "MKL_NUM_THREADS", "OMP_NUM_THREADS")
+        if key in os.environ
+    }
+
+    # 2) build full config dict
+    cfg = vars(args).copy()
+    cfg.update(os.environ)
+
+    if args.dataset == 'HuggingFaceH4/MATH-500':
+        pretty_dataset = 'math500'
+    elif args.dataset == 'TIGER-Lab/MMLU-Pro':
+        pretty_dataset = 'mmlupro'
+    elif args.dataset == 'amphora/MCLM':
+        pretty_dataset = 'math100'
     else:
-        raise NotImplementedError(
-            f"{agg_method} aggregation is not implemented."
+        raise KeyError()
+
+    # 3) make a timestamped folder
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if os.environ.get('GDRIVE_DIR', False):
+        base = Path(f"{os.environ.get('GDRIVE_DIR')}/experiments-{pretty_dataset}")
+    else:
+        base = Path(f"experiments-{pretty_dataset}")
+    run_dir = base / f'{args.model_name.replace("/", "_")}-{args.prm_model_name.replace("/", "_")}-{args.method.replace("/", "_")}'
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # 4) dump YAML
+    with open(run_dir / "config.yaml", "w") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False)
+
+    return run_dir
+
+
+if __name__ == '__main__':
+    args = parser.parse_args()
+
+    os.environ['ALGORITHM_VERSION'] = str(args.version)
+    set_seed(args.seed)
+    torch.set_num_threads(8)  # 사용 가능한 CPU 코어 수로 설정
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+
+    bnb_config = {
+        'load_in_4bit': True,
+        'load_in_8bit': False,
+        'bnb_4bit_use_double_quant': True,
+        'bnb_4bit_compute_dtype': 'float16',
+        'bnb_4bit_quant_type': 'nf4',
+    }
+
+    if args.dataset == 'openai/gsm8k':
+        dataset = load_dataset(args.dataset, 'main', cache_dir=os.getenv('CACHE_DIR'))
+        test_dataset = dataset['test'] 
+    elif args.dataset == 'Idavidrein/gpqa':
+        dataset = load_dataset(args.dataset, 'gpqa_diamond', cache_dir=os.getenv('CACHE_DIR'))
+        test_dataset = dataset['train'] 
+    elif args.dataset == 'Maxwell-Jia/AIME_2024':
+        dataset = load_dataset(args.dataset, cache_dir=os.getenv('CACHE_DIR'))
+        test_dataset = dataset['train'] 
+    elif args.dataset == 'HuggingFaceH4/MATH-500':
+        dataset = load_dataset(args.dataset, cache_dir=os.getenv('CACHE_DIR'))
+        test_dataset = dataset['test']     
+    elif args.dataset == 'deepmind/aqua_rat':
+        dataset = load_dataset(args.dataset, cache_dir=os.getenv('CACHE_DIR'))
+        test_dataset = dataset['test']     
+    elif args.dataset == 'ChilleD/SVAMP':
+        dataset = load_dataset(args.dataset, cache_dir=os.getenv('CACHE_DIR'))
+        test_dataset = dataset['test']     
+    elif args.dataset == 'TIGER-Lab/MMLU-Pro':
+        dataset = load_dataset(args.dataset, cache_dir=os.getenv('CACHE_DIR'))
+        test_dataset = dataset['test']
+    elif args.dataset == 'amphora/MCLM':
+        dataset = load_dataset(args.dataset, "MT-MATH100", cache_dir=os.getenv('CACHE_DIR'))
+        test_dataset = dataset['test']
+    elif 'cais/mmlu' in args.dataset:
+        assert '-' in args.dataset
+        dataset = load_dataset('cais/mmlu', args.dataset.split('-')[-1], cache_dir=os.getenv('CACHE_DIR'))
+        test_dataset = dataset['test']
+    else:
+        raise KeyError()
+
+    if 'RLHFlow' in args.prm_model_name:
+        prm = DeepseekPRM(
+            quantization_config=bnb_config,
+            model_name=args.prm_model_name,
+            positive_tag=args.positive_tag,
+            negative_tag=args.negative_tag,
+            score_token=args.score_token,
+            hf_token=args.hf_token,
+            use_past_key_values=args.use_past_key_values,
+            batch_size=args.batch_size,
+            device=args.device,
+            secondary_device=args.secondary_device,
+            dtype=torch.float32,
+        )        
+    else:
+        prm = GeneralPRM(
+            quantization_config=bnb_config,
+            model_name=args.prm_model_name,
+            positive_tag=args.positive_tag,
+            negative_tag=args.negative_tag,
+            score_token=args.score_token,
+            hf_token=args.hf_token,
+            use_past_key_values=args.use_past_key_values,
+            batch_size=args.batch_size,
+            device=args.device,
+            secondary_device=args.secondary_device,
+            dtype=torch.float32,
         )
-    return aggregate_scores
 
-
-def select_case_index(
-    complete_beams: dict,
-    strategy: str = "random",   # "best", "random", 또는 정수 인덱스
-) -> int:
-    """
-    (1) complete_beams에서 사용할 케이스 하나 선택하고, 그 인덱스를 리턴하는 함수.
-    complete_beams["aggregate_scores"]를 기준으로 선택.
-    """
-    scores = complete_beams.get("aggregate_scores", None)
-    if scores is None or len(scores) == 0:
-        raise ValueError("complete_beams['aggregate_scores']가 비어 있습니다.")
-
-    if strategy == "best":
-        return int(np.argmax(scores))
-    elif strategy == "random":
-        return random.randint(0, len(scores)-1)
+    if 'Llama' in args.model_name:
+        generator = LlamaGenerator(
+            max_new_tokens=args.max_new_tokens,
+            model_name=args.model_name,
+            quantization_config=bnb_config,
+            hf_token=args.hf_token,
+            use_past_key_values=args.use_past_key_values,
+            batch_size=args.batch_size,
+            device=args.device,
+            secondary_device=args.secondary_device,
+        )
     else:
-        raise ValueError(f"Unknown strategy: {strategy}")
+        raise KeyError()
 
-
-def build_cur_input_ids_from_maxima(
-    question: str,
-    generator,
-    complete_beams: dict,
-    case_idx: int,
-    maxima_mode: str = "local_max",   # "local_max" 또는 "global_max"
-    step_pattern: str = r"## Step",
-) -> torch.Tensor:
-    """
-    (2) 선택된 case_idx에 대해 step_scores에서 maxima를 찾고,
-        그 지점까지의 answer를 prefix로 사용해서 cur_input_ids를 만들어 반환.
-
-    반환: cur_input_ids (1, L)  — question + truncated_answer 전체를 encode한 결과
-    """
-    answers = complete_beams.get("answer", None)
-    step_scores_list = complete_beams.get("step_scores", None)
-
-    if answers is None or step_scores_list is None:
-        raise ValueError("complete_beams에 'answer' 또는 'step_scores'가 없습니다.")
-
-    answer = answers[case_idx]
-    step_scores = torch.tensor(step_scores_list[case_idx], dtype=torch.float32)  # (T,)
-
-    # maxima 위치 찾기
-    if maxima_mode == "local_max":
-        local_max_idxs = find_local_maxima(step_scores)
-        if len(local_max_idxs) > 0:
-            anchor_step = local_max_idxs[0]  # 가장 높은 local maxima
-        else:
-            # local maxima가 없으면 global max로 fallback
-            anchor_step = int(torch.argmax(step_scores).item())
-    elif maxima_mode == "global_max":
-        anchor_step = int(torch.argmax(step_scores).item())
-    else:
-        raise ValueError(f"Unknown maxima_mode: {maxima_mode}")
-
-    # anchor_step까지의 답변만 남기기
-    truncated_answer = _truncate_answer_at_step(
-        answer,
-        step_index=anchor_step,
-        step_pattern=step_pattern,
-    )
-
-    # question + truncated_answer를 하나의 프롬프트로 묶어서 encode
-    # (원래 프롬프트 포맷에 맞게 "\n\n" 등은 원하는 대로 바꿔도 됨)
-    full_prompt = question + "\n" + truncated_answer
-    cur_input_ids = generator.encode(full_prompt)  # (1, L)
-
-    return cur_input_ids
-
-def compute_metric(
-    metric: str,
-    logits: torch.Tensor,           # (T, V)
-) -> torch.Tensor:
-    probs = F.softmax(logits, dim=-1)  # (T,V)
-    # 표준: entropy = -sum p log p; perplexity = exp(entropy)
-    if metric in ("top1"):
-        metric = probs.topk(1, dim=-1).values.sum(-1)
-    else:
-        raise KeyError(metric)
-
-    return metric
-
-def find_local_maxima(nll: torch.Tensor):
-    T = nll.numel()
-    idxs, vals = [], []
-    for i in range(1, T-1):
-        if (nll[i-1] < nll[i]) and (nll[i] >= nll[i+1]):
-            idxs.append(i)
-            vals.append(float(nll[i]))
-    # 가장 높은 maxima의 index부터 전달하게 됩니다.
-    return [i for i, _ in sorted(zip(idxs, vals), key=lambda x: -x[1])]
-
-class GeneticSearch:
-    def __init__(
-        self,
-        method,
-        generator: BaseGenerator,
-        prm: BasePRM,
-
-        temp_update_rule=None,
-        max_trials: int = None,
-        score_aggregation: Literal["min", "mean", "last", 'prod'] = "min",
-        metric:str = 'top1',
-        select_strategy:str = 'random'
-    ):
-        self.method = method
-        self.generator = generator
-        self.prm = prm
-
-        self.temp_update_rule = temp_update_rule
-        self.max_trials = max_trials
-        self.trials = 0
-
-        self.score_aggregation = score_aggregation
-
-        self.return_all_steps = True
-
-        self.init_number_of_beams = 1
-
-        self.trial_to_ids = {}
-        self.trial_to_logits = {}
-        self.metric = metric
-        self.select_strategy = select_strategy
-
-    def compute_step_scores(self, responses: list, prm_state):
-        score_tok = getattr(self.prm, "score_token", None)
-        responses = [r.replace("\n\n## Step", f"{score_tok}## Step") for r in responses]
-        return self.prm(responses, prm_state, return_all_steps=self.return_all_steps)
-
-    def _update_temperature(self):
-        if self.temp_update_rule is None:
-            return None
-        else:
-            # TODO
-            # self.generator.temperature = ...
-            raise NotImplementedError()
-
-    def __call__(self, question: str):
-        self.trial_to_ids = {}
-        self.trial_to_logits = {}
-        self.trials = 0
-        input_ids_question = self.generator.encode(question)
-        gen_state_question = self.generator.init_state(input_ids_question)
-        prm_state_question = self.prm.init_state(question)
-
-        input_ids_question = input_ids_question.repeat(self.init_number_of_beams, 1)
-        gen_state_question = self.generator.inflate_state(gen_state_question, self.init_number_of_beams)
-        prm_state_question = self.prm.inflate_state(prm_state_question, self.init_number_of_beams)
-
-        input_len = input_ids_question.shape[1]
-        complete_beams = defaultdict(list)
+    if 'SC' in args.method:
+        search = SelfConsistencySearch(
+            method=args.method,
+            generator = generator, 
+            prm = prm,
+            max_trials=args.max_trials,
+            temp_update_rule=args.temp_update_rule,
+            score_aggregation=args.score_aggregation,
+        )
+    elif 'Genetic' in args.method:
+        search = GeneticSearch(
+            method=args.method,
+            generator = generator, 
+            prm = prm,
+            max_trials=args.max_trials,
+            temp_update_rule=args.temp_update_rule,
+            score_aggregation=args.score_aggregation,
+            metric=args.metric,
+            select_strategy=args.select_strategy,
+        )        
         
-        proposal_ids, proposal_logits, gen_state = self.generator(input_ids_question, gen_state_question)
-        # print(f'proposal_logits:{proposal_logits.shape}')
-        # proposal_metric_seq = compute_metric(self.metric, proposal_logits)
-        # peak_ids = find_local_maxima(proposal_metric_seq)
-        self.trial_to_ids[self.trials] = proposal_ids
-        self.trial_to_logits[self.trials] = proposal_logits
-        self.trials += 1
+    else:
+        raise KeyError()
+            
+    past_input_tokens = 0
+    past_output_tokens = 0
+    results = defaultdict(dict)
+    indices_to_run = range(len(test_dataset))
+    if args.test_sample_idx:  # 하나라도 있으면
+        indices_to_run = args.test_sample_idx
 
-        proposal_response_ids = proposal_ids[:, input_len :]
-        proposal_response_text = self.generator.tokenizer.batch_decode(proposal_response_ids)
-      
-        proposal_scores, proposal_score_logits, prm_state = self.compute_step_scores(proposal_response_text, prm_state_question)
+    for test_idx in tqdm(indices_to_run):
+        test_sample = test_dataset[test_idx]
+        if args.dataset == 'HuggingFaceH4/MATH-500':
+            qid = test_idx
 
-        proposal_agg_scores = aggregate(proposal_scores, self.score_aggregation).item()
+            # query 만들기question
+            test_query = test_sample["problem"]
+            formatted_query = f"{test_query}"
+        elif args.dataset == 'amphora/MCLM':
+            qid = test_idx
 
-        is_complete = self.generator.is_complete(proposal_ids)
-        # if not is_complete[0]:
-        #     complete_beams['CaseType'].append('Candidates')
-        #     complete_beams['answer'] = []
-        #     complete_beams['aggregate_scores'] = []
-        #     complete_beams['step_scores'] = []
-        #     complete_beams['temp'] = [self.generator.temperature]
-        # else:
-        complete_beams['CaseType'].append('Candidates')
-        complete_beams['answer'].append(proposal_response_text[0])
-        complete_beams['aggregate_scores'].append(proposal_agg_scores)
-        complete_beams['step_scores'].append(proposal_scores.tolist())
-        complete_beams['temp'].append(self.generator.temperature)
+            # query 만들기question
+            test_query = test_sample["en"]
+            formatted_query = f"{test_query}"
+        elif args.dataset == 'TIGER-Lab/MMLU-Pro':
+            qid = test_sample["question_id"]  # MMLU-Pro 전용
 
-        # last_proposal_ids = proposal_ids.clone()
-        logger.info(f'[Genetic] Intial {self.trials}/{self.max_trials} : {proposal_agg_scores:.4f}')
+            # query 만들기
+            test_query = test_sample["question"]
+            options = test_sample["options"]
+            formatted_query = f"{test_query}\n"
+            for i, choice in enumerate(options):
+                formatted_query += f"{i}. {choice}\n"
+        else:
+            raise KeyError()
 
-        for trial_idx in range(self.max_trials-1):
-            selected_idx = select_case_index(complete_beams, strategy=self.select_strategy)
-            selected_ids = self.trial_to_ids[selected_idx]
-            selected_logits = self.trial_to_logits[selected_idx][0]
-            print(f'selected_logits:{selected_logits.shape}')
-            proposal_metric_seq = compute_metric(self.metric, selected_logits)
-            peak_ids = find_local_maxima(proposal_metric_seq)
-            self._update_temperature()
-            if len(peak_ids) == 0:
-                # peak이 없는 상황의 경우 그냥 처음부터 새로 생성
-                input_ids_for_proposal = input_ids_question
-                new_proposal_ids, new_proposal_logits, new_gen_state = self.generator(input_ids_for_proposal, gen_state_question)
-                self.trial_to_ids[self.trials] = new_proposal_ids
-                self.trial_to_logits[self.trials] = new_proposal_logits
-                self.trials += 1
+        try:
+            outputs = search(formatted_query)
+            result = {qid: outputs}
 
-                new_proposal_respose_ids = new_proposal_ids[:, input_len :]
+            # 개별 저장
+            run_dir = save_config_and_prepare_dir(args)
+            fname = f"qid{qid}.json"
+            with open(run_dir /fname, "w") as f:
+                json.dump(to_jsonable(result), f, indent=4)
 
-                new_proposal_response_text = self.generator.tokenizer.batch_decode(new_proposal_respose_ids)
-                new_proposal_scores, new_proposal_score_logits, prm_state = self.compute_step_scores(new_proposal_response_text, prm_state_question)
-                
-                new_proposal_agg_scores = aggregate(new_proposal_scores, self.score_aggregation).item()
-                logger.info(f'[Genetic] Generating from question {self.trials}/{self.max_trials} : {new_proposal_agg_scores:.4f}')
-
-                complete_beams['CaseType'].append('Candidates')
-                complete_beams['answer'].append(new_proposal_response_text[0])
-                complete_beams['aggregate_scores'].append(new_proposal_agg_scores)
-                complete_beams['step_scores'].append(new_proposal_scores.tolist())
-                complete_beams['temp'].append(self.generator.temperature)                
-            else:
-                peak_idx = peak_ids[0] # 가장 높은 local maxima를 선택함
-                input_ids_for_proposal = selected_ids[:, :input_len+peak_idx]
-                new_proposal_ids, new_proposal_logits, new_gen_state = self.generator(input_ids_for_proposal, gen_state_question)
-                self.trial_to_ids[self.trials] = new_proposal_ids
-                self.trial_to_logits[self.trials] = new_proposal_logits
-                self.trials += 1
-
-                new_proposal_respose_ids = new_proposal_ids[:, input_len :]
-
-                new_proposal_response_text = self.generator.tokenizer.batch_decode(new_proposal_respose_ids)
-                new_proposal_scores, new_proposal_score_logits, prm_state = self.compute_step_scores(new_proposal_response_text, prm_state_question)
-                
-                new_proposal_agg_scores = aggregate(new_proposal_scores, self.score_aggregation).item()
-                logger.info(f'[Genetic] Generating from {selected_idx}-th sample {self.trials}/{self.max_trials} : {new_proposal_agg_scores:.4f}')
-
-                complete_beams['CaseType'].append('Candidates')
-                complete_beams['answer'].append(new_proposal_response_text[0])
-                complete_beams['aggregate_scores'].append(new_proposal_agg_scores)
-                complete_beams['step_scores'].append(new_proposal_scores.tolist())
-                complete_beams['temp'].append(self.generator.temperature)
-
-        return complete_beams
+        except Exception as err:
+            import traceback
+            print(traceback.format_exc() )
+            
+            logger.error(f"Error on qid {qid}: {err}")
+            continue
