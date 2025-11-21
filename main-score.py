@@ -333,7 +333,7 @@ if __name__ == '__main__':
         max_outputs_len = -1
         all_dfs = []
         acc_dict = {}
-        for budget_limit in [2, 4, 8, 10]:
+        for budget_limit in range (1,10):
             for metric in ['acc', 'Pass@L']:
                 print('='*30, f'Budget (L) {budget_limit} - Metric {metric}', '='*30)
                 for search_type, method, aggregation in method_cfgs_chain:
@@ -344,7 +344,7 @@ if __name__ == '__main__':
                             core_method=method, 
                             selection=selection_method, 
                             aggregation=aggregation,
-                            results_dir=f"{base}/experiments-{dataset}",
+                            results_dir=f"{base}/experiments-{dataset}-agg",
                             metric=metric,
                         )
                         df_method['Search Type'] = search_type
