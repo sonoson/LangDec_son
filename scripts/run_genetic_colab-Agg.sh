@@ -33,7 +33,7 @@ dataset='HuggingFaceH4/MATH-500'
 start=0
 end=1
 
-CUDA_VISIBLE_DEVICES=$CUDA_DEVICE_ID python LangDec/main.py \
+CUDA_VISIBLE_DEVICES=$CUDA_DEVICE_ID python LangDec/main_agg.py \
     --seed $seed\
     --method "Genetic_${METHOD_NAME}"\
     --metric "top1"\
