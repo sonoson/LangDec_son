@@ -291,8 +291,8 @@ class GeneticSearch:
             self._update_temperature()
 
             # 새 후보도 히스토리에 기록 (온도 업데이트에 사용)
-            self._answers.append(new_proposal_response_text[0])
-            self._agg_scores.append(new_proposal_agg_scores)
+            #self._answers.append(new_proposal_response_text[0])
+            #self._agg_scores.append(new_proposal_agg_scores)
             if len(peak_ids) == 0:
                 # peak이 없는 상황의 경우 그냥 처음부터 새로 생성
                 input_ids_for_proposal = input_ids_question
