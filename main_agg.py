@@ -143,10 +143,10 @@ def save_config_and_prepare_dir(args):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if os.environ.get('GDRIVE_DIR', False):
-        base = Path(f"{os.environ.get('GDRIVE_DIR')}/experiments-{pretty_dataset}")
+        base = Path(f"{os.environ.get('GDRIVE_DIR')}/experiments-{pretty_dataset}-agg")
     else:
         base = Path(f"experiments-{pretty_dataset}")
-    run_dir = base / f'{args.model_name.replace("/", "_")}-{args.prm_model_name.replace("/", "_")}-{args.method.replace("/", "_")}'
+    run_dir = base / f'{args.model_name.replace("/", "_")}-{args.prm_model_name.replace("/", "_")}-{args.method.replace("/", "_")-agg}'
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # 4) dump YAML
