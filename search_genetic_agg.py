@@ -3,6 +3,7 @@ import os
 import re
 import random
 import logging
+import math
 import numpy as np
 from collections import defaultdict
 from typing import Any, Dict, List, Literal, Optional, Tuple
@@ -174,14 +175,63 @@ class GeneticSearch:
         return self.prm(responses, prm_state, return_all_steps=self.return_all_steps)
 
     def _update_temperature(self):
-        if self.temp_update_rule is None:
+        if not hasattr(self.generator, "temperature"):
             return None
-        else:
-            # TODO
-            # self.generator.temperature = ...
-            raise NotImplementedError()
+        # __call__에서 한 번 저장해둔 기준 온도 (없으면 현재 온도 사용)
+        base_T = float(getattr(self, "_base_temperature", float(self.generator.temperature)))
+
+        # max_trials 정보가 없거나 1 이하이면 그냥 base_T 유지
+        if self.max_trials is None or self.max_trials <= 1:
+            self.generator.temperature = base_T
+            return base_T
+
+        # self.trials 는 for 루프 안에서:
+        #   - _update_temperature() 호출 시점: 0, 1, 2, ... (0-based 인덱스 느낌)
+        #   - 최대값은 (max_trials - 2) 정도
+        step_idx = max(0, min(self.trials, self.max_trials - 1))
+        progress = step_idx / float(self.max_trials - 1)  # 0.0 ~ 1.0
+
+        # ── 더욱 공격적인 쿨링 파라미터 ──
+        target_min_ratio = 0.35   # 마지막에는 base_T의 35% 근처까지 떨어뜨리기
+        alpha = 2.0               # alpha > 1 이면 초반부터 빠르게 식음 (front-loaded cooling)
+
+        # ratio(progress):
+        #   progress = 0   → ratio = 1.0 (base_T)
+        #   progress ~ 0.5 → ratio ≈ 0.51 (이미 꽤 낮음)
+        #   progress → 1   → ratio = target_min_ratio (0.35)
+        ratio = target_min_ratio + (1.0 - target_min_ratio) * ((1.0 - progress) ** alpha)
+
+        T = base_T * ratio
+
+        # 안전 범위 클램프 (너무 극단적이지 않도록)
+        # 정확도에 올인하는 세팅이므로 상한은 1.0 정도로 두고,
+        # 하한은 0.15까지 허용
+        T = max(0.15, min(1.0, T))
+
+        # 실제 generator에 반영
+        self.generator.temperature = float(T)
+
+        logger.info(
+            f"[TempUpdate-Math100-AggressiveCooling] "
+            f"trials={self.trials}/{self.max_trials}, "
+            f"base_T={base_T:.3f}, progress={progress:.2f}, "
+            f"ratio={ratio:.4f}, T={T:.3f}"
+        )
+
+        return T
 
     def __call__(self, question: str):
+        # ─── 온도 초기화 (질문마다 독립적인 초기 T 사용) ───
+        if hasattr(self.generator, "temperature"):
+            # 첫 호출에서 기준 온도를 저장해두고, 이후엔 그걸로 리셋
+            if not hasattr(self, "_base_temperature"):
+                self._base_temperature = float(self.generator.temperature)
+            self.generator.temperature = float(self._base_temperature)
+
+        # 온도 업데이트에 쓸 히스토리 버퍼 초기화
+        self._answers = []
+        self._agg_scores = []
+        
         self.trial_to_ids = {}
         self.trial_to_logits = {}
         self.trials = 0
@@ -211,6 +261,9 @@ class GeneticSearch:
 
         proposal_agg_scores = aggregate(proposal_scores, self.score_aggregation).item()
 
+        self._answers.append(proposal_response_text[0])
+        self._agg_scores.append(proposal_agg_scores)
+        
         is_complete = self.generator.is_complete(proposal_ids)
         # if not is_complete[0]:
         #     complete_beams['CaseType'].append('Candidates')
@@ -236,6 +289,10 @@ class GeneticSearch:
             proposal_metric_seq = compute_metric(self.metric, selected_logits)
             peak_ids = find_local_maxima(proposal_metric_seq)
             self._update_temperature()
+
+            # 새 후보도 히스토리에 기록 (온도 업데이트에 사용)
+            self._answers.append(new_proposal_response_text[0])
+            self._agg_scores.append(new_proposal_agg_scores)
             if len(peak_ids) == 0:
                 # peak이 없는 상황의 경우 그냥 처음부터 새로 생성
                 input_ids_for_proposal = input_ids_question
