@@ -294,7 +294,7 @@ if __name__ == '__main__':
 
     seed = 12389
 
-    dataset = os.environ.get('EVAL_DATASET', 'math500')
+    dataset = os.environ.get('EVAL_DATASET', 'math100')
 
     exp = 'BS'
 
@@ -361,7 +361,7 @@ if __name__ == '__main__':
         df_all = pd.concat(all_dfs, ignore_index=True)
 
 
-        out_file = f"{base}/{dataset}-seed{seed}-{model_to_pretty_name[llm_model]}-{model_to_pretty_name[prm_model]}-{selection_method}"
+        out_file = f"{base}/{dataset}-seed{seed}-{model_to_pretty_name[llm_model]}-{model_to_pretty_name[prm_model]}-{selection_method}-agg"
         df_all.to_excel(f'{out_file}.xlsx', index=False)
         df_all.to_csv(f'{out_file}.csv', index=False)
 
