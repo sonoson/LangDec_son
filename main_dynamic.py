@@ -20,7 +20,7 @@ from general_prm import GeneralPRM
 from deepseek_prm import DeepseekPRM
 from llama_generator import LlamaGenerator
 from search_sc import SelfConsistencySearch
-from search_genetic import GeneticSearch
+from search_genetic_dynamic import GeneticSearch
 
 # Create a logger object
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ def save_config_and_prepare_dir(args):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if os.environ.get('GDRIVE_DIR', False):
-        base = Path(f"{os.environ.get('GDRIVE_DIR')}/experiments-{pretty_dataset}")
+        base = Path(f"{os.environ.get('GDRIVE_DIR')}/experiments-{pretty_dataset}-dynamic")
     else:
         base = Path(f"experiments-{pretty_dataset}")
     run_dir = base / f'{args.model_name.replace("/", "_")}-{args.prm_model_name.replace("/", "_")}-{args.method.replace("/", "_")}'
