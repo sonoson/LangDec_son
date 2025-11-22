@@ -28,12 +28,13 @@ CUDA_DEVICE_ID=0
 
 seed=1234
 
-dataset='HuggingFaceH4/MATH-500'
+#dataset='HuggingFaceH4/MATH-500'
+dataset=' '
 
 start=0
 end=1
 
-CUDA_VISIBLE_DEVICES=$CUDA_DEVICE_ID python LangDec/main.py \
+CUDA_VISIBLE_DEVICES=$CUDA_DEVICE_ID python LangDec/main_dynamic.py \
     --seed $seed\
     --method "Genetic_${METHOD_NAME}"\
     --metric "top1"\
