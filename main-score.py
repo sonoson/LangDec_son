@@ -160,7 +160,7 @@ def evaluate_method_single(llm, prm, core_method, results_dir="experiments-mmlup
     response_sep = 'assistant<|end_header_id|>'
 
     method_name = f"{llm}-{prm}-{core_method}"  # 실제 폴더명
-    dataset_name = results_dir.split('-')[-1]
+    dataset_name = results_dir.split('-')[-2]
     if dataset_name == 'math500':
         dataset = load_dataset("HuggingFaceH4/MATH-500")[split]
     elif dataset_name == 'math100':
@@ -294,7 +294,7 @@ if __name__ == '__main__':
 
     seed = 12389
 
-    dataset = os.environ.get('EVAL_DATASET', 'math500')
+    dataset = os.environ.get('EVAL_DATASET', 'math100')
 
     exp = 'BS'
 
@@ -333,7 +333,7 @@ if __name__ == '__main__':
         max_outputs_len = -1
         all_dfs = []
         acc_dict = {}
-        for budget_limit in [2, 4, 8, 10]:
+        for budget_limit in [1,2,3,4,5,6,7,8,9,10]:
             for metric in ['acc', 'Pass@L']:
                 print('='*30, f'Budget (L) {budget_limit} - Metric {metric}', '='*30)
                 for search_type, method, aggregation in method_cfgs_chain:
@@ -344,7 +344,7 @@ if __name__ == '__main__':
                             core_method=method, 
                             selection=selection_method, 
                             aggregation=aggregation,
-                            results_dir=f"{base}/experiments-{dataset}",
+                            results_dir=f"{base}/experiments-{dataset}-dynamic",
                             metric=metric,
                         )
                         df_method['Search Type'] = search_type
@@ -361,7 +361,7 @@ if __name__ == '__main__':
         df_all = pd.concat(all_dfs, ignore_index=True)
 
 
-        out_file = f"{base}/{dataset}-seed{seed}-{model_to_pretty_name[llm_model]}-{model_to_pretty_name[prm_model]}-{selection_method}"
+        out_file = f"{base}/{dataset}-seed{seed}-{model_to_pretty_name[llm_model]}-{model_to_pretty_name[prm_model]}-{selection_method}-dynamic"
         df_all.to_excel(f'{out_file}.xlsx', index=False)
         df_all.to_csv(f'{out_file}.csv', index=False)
 
