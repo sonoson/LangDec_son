@@ -174,22 +174,21 @@ class GeneticSearch:
         return self.prm(responses, prm_state, return_all_steps=self.return_all_steps)
 
     def _update_temperature(self):
+        
         #if self.temp_update_rule is None:
         #    return None
         #else:
         #    # TODO
         #    # self.generator.temperature = ...
         #    raise NotImplementedError()
-                """
-        Math100용 온도 스케줄:
-        - 질문 하나 안에서 trial이 진행될수록: 탐색 → 활용 쪽으로 점진적으로 온도 감소
-        - 최근 PRM aggregate score가 개선되면: 온도 살짝 낮춰서 더 '집중'
-        - 최근 score가 악화되면: 온도 살짝 올려서 '다른 해법' 탐색
-        """
-
-
+        #        """
+        #Math100용 온도 스케줄:
+        #- 질문 하나 안에서 trial이 진행될수록: 탐색 → 활용 쪽으로 점진적으로 온도 감소
+        #- 최근 PRM aggregate score가 개선되면: 온도 살짝 낮춰서 더 '집중'
+        #- 최근 score가 악화되면: 온도 살짝 올려서 '다른 해법' 탐색
+        #"""
         # generator에 temperature가 없으면 아무 것도 안 함
-        if not hasattr(self.generator, "temperature"):
+        if not hasattr(self.generator,"temperature"):
             return None
         base_T = float(getattr(self, "_base_temperature", float(self.generator.temperature)))
 
